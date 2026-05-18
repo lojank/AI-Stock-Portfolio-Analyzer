@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useState, FormEvent, useEffect } from 'react';
 import { useRouter, useParams } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 
 export default function EditPortfolioPage() {
   const [tickers, setTickers] = useState<string[]>([]);
@@ -13,6 +14,12 @@ export default function EditPortfolioPage() {
   const router = useRouter();
   const params = useParams();
   const portfolioId = params.id as string;
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    localStorage.removeItem('userId');
+    router.push('/login');
+  };
 
   useEffect(() => {
     const fetchPortfolio = async () => {
@@ -30,7 +37,8 @@ export default function EditPortfolioPage() {
           }
         } else {
           // Fetch all portfolios and filter
-          const res = await fetch(`http://localhost:8000/portfolio/${userId}`);
+          const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const res = await fetch(`${API_URL}/portfolio/${userId}`);
           if (res.ok) {
             const data = await res.json();
             const target = data.find((p: any) => p.id === portfolioId);
@@ -75,7 +83,8 @@ export default function EditPortfolioPage() {
         localStorage.setItem('demo_portfolios', JSON.stringify(updated));
         await new Promise(resolve => setTimeout(resolve, 600)); // fake network delay
       } else {
-        const res = await fetch(`http://localhost:8000/portfolio/${userId}/${portfolioId}`, {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${API_URL}/portfolio/${userId}/${portfolioId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tickers, name: name || undefined })
@@ -109,12 +118,12 @@ export default function EditPortfolioPage() {
               <span className="text-xl font-bold text-zinc-900 dark:text-white">Edit Portfolio</span>
             </div>
             <div className="flex items-center space-x-4">
-              <Link 
-                href="/login" 
+              <button 
+                onClick={handleSignOut}
                 className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 transition-colors bg-zinc-100 dark:bg-zinc-800 px-3 py-1.5 rounded-md"
               >
                 Sign out
-              </Link>
+              </button>
             </div>
           </div>
         </div>

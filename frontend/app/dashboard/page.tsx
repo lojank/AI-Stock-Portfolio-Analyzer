@@ -2,10 +2,19 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabase';
 
 export default function DashboardPage() {
   const [portfolios, setPortfolios] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const router = useRouter();
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    localStorage.removeItem('userId');
+    router.push('/login');
+  };
 
   useEffect(() => {
     const fetchPortfolios = async () => {
@@ -17,7 +26,8 @@ export default function DashboardPage() {
             setPortfolios(JSON.parse(demoPortfoliosStr));
           }
         } else {
-          const res = await fetch(`http://localhost:8000/portfolio/${userId}`);
+          const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+          const res = await fetch(`${API_URL}/portfolio/${userId}`);
           if (res.ok) {
             const data = await res.json();
             setPortfolios(data);
@@ -47,7 +57,8 @@ export default function DashboardPage() {
       }
     } else {
       try {
-        const res = await fetch(`http://localhost:8000/portfolio/${userId}/${portfolioId}`, {
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const res = await fetch(`${API_URL}/portfolio/${userId}/${portfolioId}`, {
           method: 'DELETE',
         });
         if (res.ok) {
@@ -76,12 +87,12 @@ export default function DashboardPage() {
               <span className="text-sm text-zinc-500 dark:text-zinc-400 hidden sm:inline-block">
                 Welcome back!
               </span>
-              <Link 
-                href="/login" 
+              <button 
+                onClick={handleSignOut}
                 className="text-sm font-medium text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 transition-colors bg-zinc-100 dark:bg-zinc-800 px-3 py-1.5 rounded-md"
               >
                 Sign out
-              </Link>
+              </button>
             </div>
           </div>
         </div>
