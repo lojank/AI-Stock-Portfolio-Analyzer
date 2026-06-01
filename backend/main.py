@@ -1,13 +1,25 @@
+import os
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from supabase import create_client
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
+from ingestion.pipeline import run_pipeline
+from ai.storage import get_summaries, save_summary
+from ai.risk_narrative import generate_risk_narrative
+from ingestion.rss_scraper import fetch_news, is_valid_ticker
+from ai.summarizer import summarize_articles
+from ai.validate_key import validate_gemini_api_key
+from ingestion.storage import get_cached_narrative, save_cached_narrative
+from cachetools import TTLCache
+from typing import Optional
 
 app = FastAPI()
+
+# In-memory cache to save GCS latency (100 items max, 24 hr TTL)
+NARRATIVE_MEMORY_CACHE = TTLCache(maxsize=100, ttl=86400)
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,7 +31,133 @@ app.add_middleware(
 
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
 
-from typing import Optional
+# Local helper functions for API keys and quota limits
+RATE_LIMIT_KEY_RISK = "Gemini API rate limit or quota exceeded."
+
+def resolve_gemini_api_key(*, is_demo: bool, header_key: str | None) -> tuple[str | None, bool]:
+    if is_demo:
+        key = os.getenv("DEMO_GEMINI_API_KEY", "").strip()
+        return key or None, False
+    if header_key and header_key.strip():
+        return header_key.strip(), True
+    return None, False
+
+def is_rate_limit_summary(summary: dict) -> bool:
+    return (
+        summary.get("key_risk") == RATE_LIMIT_KEY_RISK
+        or "Gemini API free tier daily quota" in summary.get("summary", "")
+    )
+
+def is_rate_limit_narrative(narrative: str) -> bool:
+    if not narrative:
+        return False
+    lower = narrative.lower()
+    quota_signal = "exceeded" in lower or "unavailable" in lower or "constraints" in lower
+    return "rate limit" in lower or ("quota" in lower and quota_signal)
+
+def _quota_message(
+    *,
+    status: str,
+    used_custom_key: bool,
+    failed_tickers: list[str],
+    narrative_limited: bool,
+    is_demo: bool,
+    using_demo_key: bool,
+) -> str:
+    tickers_note = f" ({', '.join(failed_tickers)})" if failed_tickers else ""
+
+    if status == "server_exhausted":
+        if is_demo and using_demo_key:
+            return (
+                "Demo briefings are temporarily unavailable due to API limits. "
+                "Please try again later, or sign in to use your own Gemini API key."
+            )
+        if is_demo:
+            return (
+                "The shared briefing API limit for demo mode has been reached. "
+                "Sign in and add your own Gemini API key on the Dashboard to generate briefings with your personal quota."
+            )
+        return (
+            "The app's shared Gemini API quota has been used up for now. "
+            "Add your own free API key on the Dashboard - briefings will then use your personal quota instead."
+        )
+
+    if status == "user_exhausted":
+        return (
+            "Your Gemini API key has reached its rate or daily quota limit. "
+            "Limits typically reset at midnight Pacific time. "
+            "Check usage at https://ai.dev/rate-limit or try again later."
+        )
+
+    parts = []
+    if failed_tickers:
+        if used_custom_key:
+            parts.append(
+                f"These asset briefings could not be generated because your API key hit its quota limit{tickers_note}."
+            )
+        elif is_demo and using_demo_key:
+            parts.append(
+                f"These demo briefings are temporarily unavailable{tickers_note}. Try again later or sign in to use your own API key."
+            )
+        elif is_demo:
+            parts.append(
+                f"These asset briefings are unavailable because the shared API limit was reached{tickers_note}. Sign in to use your own API key."
+            )
+        else:
+            parts.append(
+                f"These asset briefings could not be generated because the shared API limit was reached{tickers_note}. "
+                "Add your own API key on the Dashboard to continue."
+            )
+    if narrative_limited:
+        parts.append(
+            "The portfolio overview could not be generated due to API limits; individual briefings below may still be available."
+        )
+    return " ".join(parts)
+
+def build_api_quota(
+    *,
+    used_custom_key: bool,
+    rate_limited_tickers: list[str],
+    summaries: list[dict],
+    narrative: str,
+    is_demo: bool,
+    using_demo_key: bool = False,
+) -> dict:
+    failed_tickers = list(dict.fromkeys(rate_limited_tickers))
+    narrative_limited = is_rate_limit_narrative(narrative)
+
+    if not failed_tickers and not narrative_limited:
+        return {
+            "status": "ok",
+            "used_custom_key": used_custom_key,
+            "using_demo_key": using_demo_key,
+            "failed_tickers": [],
+            "narrative_limited": False,
+            "message": "",
+        }
+
+    if len(summaries) == 0 and (failed_tickers or narrative_limited):
+        status = "user_exhausted" if used_custom_key else "server_exhausted"
+    else:
+        status = "partial"
+
+    message = _quota_message(
+        status=status,
+        used_custom_key=used_custom_key,
+        failed_tickers=failed_tickers,
+        narrative_limited=narrative_limited,
+        is_demo=is_demo,
+        using_demo_key=using_demo_key,
+    )
+
+    return {
+        "status": status,
+        "used_custom_key": used_custom_key,
+        "using_demo_key": using_demo_key,
+        "failed_tickers": failed_tickers,
+        "narrative_limited": narrative_limited,
+        "message": message,
+    }
 
 class PortfolioRequest(BaseModel):
     tickers: list[str]
@@ -27,7 +165,7 @@ class PortfolioRequest(BaseModel):
 
 @app.get("/portfolio/{user_id}")
 def get_portfolio(user_id: str):
-    result = supabase.table("portfolios").select("*").eq("user_id", user_id).execute()
+    result = supabase.table("portfolios").select("*").eq("user_id", user_id).order("created_at").execute()
     return result.data
 
 @app.post("/portfolio/{user_id}")
@@ -60,3 +198,251 @@ def update_portfolio(user_id: str, portfolio_id: str, request: PortfolioRequest)
 def delete_portfolio(user_id: str, portfolio_id: str):
     result = supabase.table("portfolios").delete().eq("id", portfolio_id).eq("user_id", user_id).execute()
     return result.data
+
+@app.post("/ingest")
+async def trigger_ingestion():
+    # Clear both L1 and L2 caches when a new ingestion runs
+    NARRATIVE_MEMORY_CACHE.clear()
+    from ingestion.storage import clear_narrative_cache
+    try:
+        clear_narrative_cache()
+    except Exception as e:
+        print(f"Failed to clear GCS narrative cache: {e}")
+
+    result = await run_pipeline()
+    return result
+
+@app.get("/summaries/{ticker}")
+def get_ticker_summary(ticker: str):
+    return get_summaries(ticker.upper())
+
+
+@app.post("/validate-gemini-key")
+async def validate_gemini_key_endpoint(x_gemini_api_key: Optional[str] = Header(None)):
+    if not x_gemini_api_key or not x_gemini_api_key.strip():
+        return {
+            "valid": False,
+            "status": "missing",
+            "message": "Enter an API key to validate.",
+        }
+    return validate_gemini_api_key(x_gemini_api_key.strip())
+
+
+
+def _narrative_payload(
+    narrative: str,
+    summaries: list,
+    tickers_list: list,
+    used_custom_key: bool,
+    rate_limited_tickers: list,
+    is_demo: bool,
+    using_demo_key: bool,
+) -> dict:
+    return {
+        "narrative": narrative,
+        "summaries": summaries,
+        "tickers": tickers_list,
+        "api_quota": build_api_quota(
+            used_custom_key=used_custom_key,
+            rate_limited_tickers=rate_limited_tickers,
+            summaries=summaries,
+            narrative=narrative,
+            is_demo=is_demo,
+            using_demo_key=using_demo_key,
+        ),
+    }
+
+
+@app.get("/portfolio/{user_id}/narrative/{portfolio_id}")
+async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Optional[str] = None, x_gemini_api_key: Optional[str] = Header(None)):
+    is_demo = user_id == "demo"
+    gemini_api_key, used_custom_key = resolve_gemini_api_key(
+        is_demo=is_demo, header_key=x_gemini_api_key
+    )
+    using_demo_key = is_demo and bool(gemini_api_key)
+    rate_limited_tickers: list[str] = []
+
+    if is_demo and tickers:
+        tickers_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    else:
+        # Get user's tickers for the specific portfolio
+        port = supabase.table("portfolios")\
+            .select("tickers")\
+            .eq("id", portfolio_id)\
+            .eq("user_id", user_id)\
+            .execute()
+
+        if not port.data:
+            return {"error": "Portfolio not found"}
+
+        tickers_list = port.data[0]["tickers"]
+
+    # Get latest summary for each ticker
+    summaries = []
+    tickers_needing_analysis = []
+    for ticker in tickers_list:
+        data = get_summaries(ticker, limit=1)
+        if data:
+            if not is_rate_limit_summary(data[0]):
+                summaries.append(data[0])  # most recent
+            else:
+                tickers_needing_analysis.append(ticker)
+        else:
+            tickers_needing_analysis.append(ticker)
+
+    # On-demand analysis for tickers with no valid cached summary
+    if tickers_needing_analysis:
+        print(f"Tickers needing on-demand analysis: {tickers_needing_analysis}")
+        for ticker in tickers_needing_analysis:
+            try:
+                articles = fetch_news(ticker)
+                print(f"  {ticker}: fetched {len(articles)} articles")
+                if articles:
+                    from ingestion.relevance import is_relevant
+                    relevant_articles = [a for a in articles if is_relevant(a, ticker)]
+                    print(f"  {ticker}: {len(relevant_articles)} relevant articles after filter")
+                    # Fall back to all articles if relevance filter is too aggressive
+                    if not relevant_articles:
+                        relevant_articles = articles[:5]
+                        print(f"  {ticker}: relevance filter too strict, using top 5 articles as fallback")
+                    result = summarize_articles(ticker, relevant_articles, api_key=gemini_api_key)
+                    if not is_rate_limit_summary(result):
+                        save_summary(result)
+                        summaries.append(result)
+                        print(f"  {ticker}: analysis saved successfully")
+                    else:
+                        rate_limited_tickers.append(ticker)
+                        print(f"  {ticker}: analysis returned rate-limit error")
+                else:
+                    print(f"  {ticker}: no articles found from RSS feed")
+            except Exception as e:
+                print(f"Error analyzing {ticker}: {e}")
+
+    if not summaries:
+        return _narrative_payload(
+            "No portfolio data available.",
+            [],
+            tickers_list,
+            used_custom_key,
+            rate_limited_tickers,
+            is_demo,
+            using_demo_key,
+        )
+
+    # Generate a cache key based on the sorted list of tickers and their latest summary timestamps
+    import hashlib
+    sorted_summaries = sorted(summaries, key=lambda s: s["ticker"])
+    key_components = [f"{s['ticker']}:{s.get('created_at', '')}" for s in sorted_summaries]
+    cache_string = "|".join(key_components)
+    cache_key = hashlib.sha256(cache_string.encode()).hexdigest()
+
+    # L1 Cache Check (Memory)
+    if cache_key in NARRATIVE_MEMORY_CACHE:
+        return _narrative_payload(
+            NARRATIVE_MEMORY_CACHE[cache_key],
+            summaries,
+            tickers_list,
+            used_custom_key,
+            rate_limited_tickers,
+            is_demo,
+            using_demo_key,
+        )
+
+    # L2 Cache Check (GCS)
+    try:
+        cached_narrative = get_cached_narrative(cache_key)
+        if cached_narrative:
+            NARRATIVE_MEMORY_CACHE[cache_key] = cached_narrative
+            return _narrative_payload(
+                cached_narrative,
+                summaries,
+                tickers_list,
+                used_custom_key,
+                rate_limited_tickers,
+                is_demo,
+                using_demo_key,
+            )
+    except Exception as e:
+        print(f"Error checking GCS cache (L2 cache bypass): {e}")
+
+    # Cache miss - generate new narrative and save to both caches
+    narrative = generate_risk_narrative(summaries, api_key=gemini_api_key)
+    
+    try:
+        save_cached_narrative(cache_key, narrative)
+    except Exception as e:
+        print(f"Error saving to GCS cache (ignoring): {e}")
+
+    NARRATIVE_MEMORY_CACHE[cache_key] = narrative
+
+    return _narrative_payload(
+        narrative,
+        summaries,
+        tickers_list,
+        used_custom_key,
+        rate_limited_tickers,
+        is_demo,
+        using_demo_key,
+    )
+
+@app.post("/analyze/{ticker}")
+async def analyze_ticker(ticker: str, x_gemini_api_key: Optional[str] = Header(None)):
+    ticker = ticker.upper()
+
+    # Validate ticker exists
+    if not is_valid_ticker(ticker):
+        return {
+            "status": "invalid_ticker",
+            "message": f"{ticker} doesn't appear to be a valid ticker. Please check the symbol and try again."
+        }
+
+    # Check if we already have a recent summary (within 24 hours)
+    existing = supabase.table("summaries")\
+        .select("*")\
+        .eq("ticker", ticker)\
+        .order("created_at", desc=True)\
+        .limit(1)\
+        .execute()
+
+    if existing.data:
+        summary_data = existing.data[0]
+        # Ignore cached summaries that were rate-limited fallbacks
+        is_error = (
+            summary_data.get("key_risk") == "Gemini API rate limit or quota exceeded."
+            or "Gemini API free tier daily quota" in summary_data.get("summary", "")
+        )
+        if not is_error:
+            from datetime import datetime, timezone
+            raw = summary_data["created_at"]
+            last_updated = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if last_updated.tzinfo is None:
+                last_updated = last_updated.replace(tzinfo=timezone.utc)
+            age_hours = (datetime.now(timezone.utc) - last_updated).total_seconds() / 3600
+            if age_hours < 24:
+                return {"status": "cached", "data": summary_data}
+
+    # No recent summary - fetch and summarize now
+    articles = fetch_news(ticker)
+    if not articles:
+        return {"status": "error", "message": f"No news found for {ticker}"}
+
+    # Filter articles by semantic relevance
+    from ingestion.relevance import is_relevant
+    relevant_articles = [a for a in articles if is_relevant(a, ticker)]
+    print(f"Filtered {len(relevant_articles)} relevant articles (out of {len(articles)}) for {ticker}...")
+    # Fall back to all articles if relevance filter is too aggressive
+    if not relevant_articles:
+        relevant_articles = articles[:5]
+        print(f"Relevance filter too strict for {ticker}, using top 5 articles as fallback")
+
+    result = summarize_articles(ticker, relevant_articles, api_key=x_gemini_api_key)
+    
+    # Don't save rate-limited fallback results to the database
+    is_error = (
+        result.get("key_risk") == "Gemini API rate limit or quota exceeded."
+        or "Gemini API free tier daily quota" in result.get("summary", "")
+    )
+    if not is_error:
+        save_summary(result)
+        
+    return {"status": "ok", "data": result}
