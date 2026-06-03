@@ -112,7 +112,7 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-semibold text-zinc-900 dark:text-zinc-100">
               Dashboard
             </h1>
-            {userId !== 'demo' && portfolios.length > 0 && (
+            {userId !== 'demo' && (
               <Link
                 href="/dashboard/new"
                 className="inline-flex items-center rounded bg-teal-600 hover:bg-teal-700 text-white px-4 py-2.5 text-sm font-medium transition-colors"
@@ -155,7 +155,7 @@ export default function DashboardPage() {
                 <div className="rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 px-6 py-10 text-center bg-white dark:bg-zinc-900">
                   <p className="text-sm text-zinc-500 dark:text-zinc-400">
                     {userId !== 'demo'
-                      ? <>No active watchlists. Click <span className="font-semibold text-zinc-700 dark:text-zinc-300">&lsquo;New Portfolio&rsquo;</span> above to get started.</>
+                      ? <>No active watchlists. Click <Link href="/dashboard/new" className="font-semibold text-teal-600 hover:text-teal-700 dark:text-teal-400 underline">&lsquo;New Portfolio&rsquo;</Link> to get started.</>
                       : <>No watchlists. <Link href="/login" className="font-semibold text-teal-600 hover:text-teal-700 dark:text-teal-400 underline">Sign in</Link> to create your first one.</>}
                   </p>
                 </div>

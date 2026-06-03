@@ -4,12 +4,15 @@ import Link from 'next/link';
 import { useState, FormEvent, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '@/lib/supabase';
+import { validateTicker } from '@/lib/validateTicker';
 
 export default function NewPortfolioPage() {
   const [tickers, setTickers] = useState<string[]>(['AAPL']);
   const [name, setName] = useState('');
   const [newTicker, setNewTicker] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [isValidatingTicker, setIsValidatingTicker] = useState(false);
+  const [tickerError, setTickerError] = useState('');
   const [error, setError] = useState('');
   const router = useRouter();
 
@@ -26,12 +29,29 @@ export default function NewPortfolioPage() {
     router.push('/login');
   };
 
-  const addTicker = (e: React.MouseEvent<HTMLButtonElement>) => {
+  const addTicker = async (e: React.MouseEvent<HTMLButtonElement>) => {
     e.preventDefault();
-    if (newTicker && !tickers.includes(newTicker.toUpperCase())) {
-      setTickers([...tickers, newTicker.toUpperCase()]);
-      setNewTicker('');
+    const trimmed = newTicker.trim().toUpperCase();
+    if (!trimmed || tickers.includes(trimmed)) return;
+
+    setIsValidatingTicker(true);
+    setTickerError('');
+
+    const result = await validateTicker(trimmed);
+    setIsValidatingTicker(false);
+
+    if (!result) {
+      setTickerError('Could not reach the server.');
+      return;
     }
+
+    if (!result.valid) {
+      setTickerError(result.message);
+      return;
+    }
+
+    setTickers([...tickers, trimmed]);
+    setNewTicker('');
   };
 
   const removeTicker = (tickerToRemove: string) => {
@@ -53,27 +73,13 @@ export default function NewPortfolioPage() {
       // Analyze each ticker and collect any invalid ones
       const results = await Promise.all(
         tickers.map(async ticker => {
-          try {
-            const headers: Record<string, string> = {};
-            const customKey = localStorage.getItem('gemini_api_key');
-            if (customKey && userId !== 'demo') {
-              headers['X-Gemini-API-Key'] = customKey;
-            }
-
-            const analyzeRes = await fetch(`${API_URL}/analyze/${encodeURIComponent(ticker)}`, {
-              method: "POST",
-              headers
-            });
-            return { ticker, data: await analyzeRes.json() };
-          } catch (err) {
-            console.error(`Failed to analyze ${ticker}`, err);
-            return null;
-          }
+          const data = await validateTicker(ticker);
+          return { ticker, data };
         })
       );
 
       results.forEach(result => {
-        if (result && result.data && result.data.status === "invalid_ticker") {
+        if (result.data && !result.data.valid) {
           invalidTickers.push(result.ticker);
         }
       });
@@ -192,20 +198,29 @@ export default function NewPortfolioPage() {
                           className="block w-full rounded-l border border-r-0 border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3.5 py-2 text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 focus:border-teal-500 focus:ring-0 focus:outline-none text-sm transition-colors uppercase"
                           placeholder="e.g. MSFT"
                           value={newTicker}
-                          onChange={(e) => setNewTicker(e.target.value)}
+                          onChange={(e) => {
+                            setNewTicker(e.target.value);
+                            if (tickerError) setTickerError('');
+                          }}
                         />
                       </div>
                       <button
                         type="button"
                         onClick={addTicker}
-                        className="relative -ml-px inline-flex items-center gap-x-1.5 rounded-r px-4 py-2 text-sm font-medium text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 bg-zinc-50 dark:bg-zinc-900 transition-colors"
+                        disabled={!newTicker.trim() || isValidatingTicker}
+                        className="relative -ml-px inline-flex items-center gap-x-1.5 rounded-r px-4 py-2 text-sm font-medium text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800 bg-zinc-50 dark:bg-zinc-900 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <svg className="-ml-0.5 h-4 w-4 text-zinc-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                           <path d="M10.75 4.75a.75.75 0 00-1.5 0v4.5h-4.5a.75.75 0 000 1.5h4.5v4.5a.75.75 0 001.5 0v-4.5h4.5a.75.75 0 000-1.5h-4.5v-4.5z" />
                         </svg>
-                        Add
+                        {isValidatingTicker ? 'Checking…' : 'Add'}
                       </button>
                     </div>
+                    {tickerError && (
+                      <p className="mt-2 text-xs font-semibold text-rose-600 dark:text-rose-400">
+                        {tickerError}
+                      </p>
+                    )}
                   </div>
 
                   {tickers.length > 0 && (

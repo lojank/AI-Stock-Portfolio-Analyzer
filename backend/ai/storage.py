@@ -8,13 +8,15 @@ supabase = create_client(
 )
 
 def save_summary(result: dict):
+    created_at = datetime.utcnow().isoformat()
+    result["created_at"] = created_at
     supabase.table("summaries").insert({
         "ticker": result["ticker"],
         "summary": result.get("summary", ""),
         "sentiment_score": map_sentiment(result.get("sentiment", "neutral")),
         "key_risk": result.get("key_risk", ""),
         "key_opportunity": result.get("key_opportunity", ""),
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": created_at
     }).execute()
 
 def get_summaries(ticker: str, limit: int = 30) -> list[dict]:

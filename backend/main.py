@@ -9,9 +9,15 @@ from supabase import create_client
 from ingestion.pipeline import run_pipeline
 from ai.storage import get_summaries, save_summary
 from ai.risk_narrative import generate_risk_narrative
-from ingestion.rss_scraper import fetch_news, is_valid_ticker
-from ai.summarizer import summarize_articles
+from ingestion.rss_scraper import fetch_news, is_valid_ticker, is_valid_ticker_format
+from ai.summarizer import summarize_articles, summarize_articles_batch
 from ai.validate_key import validate_gemini_api_key
+from ai.summary_cache import (
+    is_rate_limit_summary,
+    is_ticker_rate_limited,
+    mark_ticker_rate_limited,
+    summary_is_fresh,
+)
 from ingestion.storage import get_cached_narrative, save_cached_narrative
 from cachetools import TTLCache
 from typing import Optional
@@ -32,7 +38,6 @@ app.add_middleware(
 supabase = create_client(os.getenv("SUPABASE_URL"), os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
 
 # Local helper functions for API keys and quota limits
-RATE_LIMIT_KEY_RISK = "Gemini API rate limit or quota exceeded."
 
 def resolve_gemini_api_key(*, is_demo: bool, header_key: str | None) -> tuple[str | None, bool]:
     if is_demo:
@@ -41,12 +46,6 @@ def resolve_gemini_api_key(*, is_demo: bool, header_key: str | None) -> tuple[st
     if header_key and header_key.strip():
         return header_key.strip(), True
     return None, False
-
-def is_rate_limit_summary(summary: dict) -> bool:
-    return (
-        summary.get("key_risk") == RATE_LIMIT_KEY_RISK
-        or "Gemini API free tier daily quota" in summary.get("summary", "")
-    )
 
 def is_rate_limit_narrative(narrative: str) -> bool:
     if not narrative:
@@ -228,6 +227,78 @@ async def validate_gemini_key_endpoint(x_gemini_api_key: Optional[str] = Header(
     return validate_gemini_api_key(x_gemini_api_key.strip())
 
 
+@app.get("/validate-ticker/{ticker}")
+def validate_ticker_endpoint(ticker: str):
+    ticker = ticker.upper().strip()
+    if not is_valid_ticker_format(ticker):
+        return {
+            "valid": False,
+            "status": "invalid_ticker",
+            "message": f"{ticker} is not a valid ticker symbol. Use 1–10 letters, numbers, dots, or hyphens with no spaces.",
+        }
+    if not is_valid_ticker(ticker):
+        return {
+            "valid": False,
+            "status": "invalid_ticker",
+            "message": f"{ticker} doesn't appear to be a valid ticker. Please check the symbol and try again.",
+        }
+    return {
+        "valid": True,
+        "status": "ok",
+        "message": f"{ticker} is valid.",
+    }
+
+
+def _fetch_relevant_articles(ticker: str) -> list[dict]:
+    from ingestion.relevance import is_relevant
+
+    articles = fetch_news(ticker)
+    if not articles:
+        return []
+    relevant_articles = [a for a in articles if is_relevant(a, ticker)]
+    if not relevant_articles:
+        relevant_articles = articles[:5]
+    return relevant_articles
+
+
+def _run_batch_on_demand_analysis(
+    tickers: list[str],
+    gemini_api_key: str | None,
+    rate_limited_tickers: list[str],
+) -> list[dict]:
+    """Fetch news and batch-summarize uncached tickers."""
+    ticker_articles: dict[str, list[dict]] = {}
+    new_summaries: list[dict] = []
+
+    for ticker in tickers:
+        if is_ticker_rate_limited(ticker, gemini_api_key):
+            rate_limited_tickers.append(ticker)
+            continue
+        articles = _fetch_relevant_articles(ticker)
+        if articles:
+            ticker_articles[ticker] = articles
+            print(f"  {ticker}: queued {len(articles)} articles for batch analysis")
+        else:
+            print(f"  {ticker}: no articles found from RSS feed")
+
+    if not ticker_articles:
+        return new_summaries
+
+    print(f"Batch analyzing {len(ticker_articles)} tickers: {list(ticker_articles.keys())}")
+    results = summarize_articles_batch(ticker_articles, api_key=gemini_api_key)
+
+    for ticker, result in results.items():
+        if is_rate_limit_summary(result):
+            mark_ticker_rate_limited(ticker, gemini_api_key)
+            rate_limited_tickers.append(ticker)
+            print(f"  {ticker}: analysis returned rate-limit error")
+        else:
+            save_summary(result)
+            new_summaries.append(result)
+            print(f"  {ticker}: analysis saved successfully")
+
+    return new_summaries
+
 
 def _narrative_payload(
     narrative: str,
@@ -277,46 +348,30 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
 
         tickers_list = port.data[0]["tickers"]
 
-    # Get latest summary for each ticker
+    # Get latest summary for each ticker (24h TTL, skip rate-limit cooldown)
     summaries = []
     tickers_needing_analysis = []
     for ticker in tickers_list:
+        if is_ticker_rate_limited(ticker, gemini_api_key):
+            rate_limited_tickers.append(ticker)
+            continue
+
         data = get_summaries(ticker, limit=1)
-        if data:
-            if not is_rate_limit_summary(data[0]):
-                summaries.append(data[0])  # most recent
-            else:
-                tickers_needing_analysis.append(ticker)
+        if data and not is_rate_limit_summary(data[0]) and summary_is_fresh(data[0]):
+            summaries.append(data[0])
         else:
             tickers_needing_analysis.append(ticker)
 
-    # On-demand analysis for tickers with no valid cached summary
+    # Batch on-demand analysis for stale or missing summaries
     if tickers_needing_analysis:
         print(f"Tickers needing on-demand analysis: {tickers_needing_analysis}")
-        for ticker in tickers_needing_analysis:
-            try:
-                articles = fetch_news(ticker)
-                print(f"  {ticker}: fetched {len(articles)} articles")
-                if articles:
-                    from ingestion.relevance import is_relevant
-                    relevant_articles = [a for a in articles if is_relevant(a, ticker)]
-                    print(f"  {ticker}: {len(relevant_articles)} relevant articles after filter")
-                    # Fall back to all articles if relevance filter is too aggressive
-                    if not relevant_articles:
-                        relevant_articles = articles[:5]
-                        print(f"  {ticker}: relevance filter too strict, using top 5 articles as fallback")
-                    result = summarize_articles(ticker, relevant_articles, api_key=gemini_api_key)
-                    if not is_rate_limit_summary(result):
-                        save_summary(result)
-                        summaries.append(result)
-                        print(f"  {ticker}: analysis saved successfully")
-                    else:
-                        rate_limited_tickers.append(ticker)
-                        print(f"  {ticker}: analysis returned rate-limit error")
-                else:
-                    print(f"  {ticker}: no articles found from RSS feed")
-            except Exception as e:
-                print(f"Error analyzing {ticker}: {e}")
+        summaries.extend(
+            _run_batch_on_demand_analysis(
+                tickers_needing_analysis,
+                gemini_api_key,
+                rate_limited_tickers,
+            )
+        )
 
     if not summaries:
         return _narrative_payload(
@@ -365,15 +420,15 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
     except Exception as e:
         print(f"Error checking GCS cache (L2 cache bypass): {e}")
 
-    # Cache miss - generate new narrative and save to both caches
+    # Cache miss - generate new narrative and save to both caches (unless rate-limited)
     narrative = generate_risk_narrative(summaries, api_key=gemini_api_key)
     
-    try:
-        save_cached_narrative(cache_key, narrative)
-    except Exception as e:
-        print(f"Error saving to GCS cache (ignoring): {e}")
-
-    NARRATIVE_MEMORY_CACHE[cache_key] = narrative
+    if not is_rate_limit_narrative(narrative):
+        try:
+            save_cached_narrative(cache_key, narrative)
+        except Exception as e:
+            print(f"Error saving to GCS cache (ignoring): {e}")
+        NARRATIVE_MEMORY_CACHE[cache_key] = narrative
 
     return _narrative_payload(
         narrative,
@@ -406,43 +461,25 @@ async def analyze_ticker(ticker: str, x_gemini_api_key: Optional[str] = Header(N
 
     if existing.data:
         summary_data = existing.data[0]
-        # Ignore cached summaries that were rate-limited fallbacks
-        is_error = (
-            summary_data.get("key_risk") == "Gemini API rate limit or quota exceeded."
-            or "Gemini API free tier daily quota" in summary_data.get("summary", "")
-        )
-        if not is_error:
-            from datetime import datetime, timezone
-            raw = summary_data["created_at"]
-            last_updated = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-            if last_updated.tzinfo is None:
-                last_updated = last_updated.replace(tzinfo=timezone.utc)
-            age_hours = (datetime.now(timezone.utc) - last_updated).total_seconds() / 3600
-            if age_hours < 24:
-                return {"status": "cached", "data": summary_data}
+        if not is_rate_limit_summary(summary_data) and summary_is_fresh(summary_data):
+            return {"status": "cached", "data": summary_data}
+
+    if is_ticker_rate_limited(ticker, x_gemini_api_key):
+        return {
+            "status": "error",
+            "message": f"{ticker} briefing temporarily unavailable due to API rate limits. Try again in about 15 minutes.",
+        }
 
     # No recent summary - fetch and summarize now
-    articles = fetch_news(ticker)
-    if not articles:
+    relevant_articles = _fetch_relevant_articles(ticker)
+    if not relevant_articles:
         return {"status": "error", "message": f"No news found for {ticker}"}
 
-    # Filter articles by semantic relevance
-    from ingestion.relevance import is_relevant
-    relevant_articles = [a for a in articles if is_relevant(a, ticker)]
-    print(f"Filtered {len(relevant_articles)} relevant articles (out of {len(articles)}) for {ticker}...")
-    # Fall back to all articles if relevance filter is too aggressive
-    if not relevant_articles:
-        relevant_articles = articles[:5]
-        print(f"Relevance filter too strict for {ticker}, using top 5 articles as fallback")
-
     result = summarize_articles(ticker, relevant_articles, api_key=x_gemini_api_key)
-    
-    # Don't save rate-limited fallback results to the database
-    is_error = (
-        result.get("key_risk") == "Gemini API rate limit or quota exceeded."
-        or "Gemini API free tier daily quota" in result.get("summary", "")
-    )
-    if not is_error:
+
+    if is_rate_limit_summary(result):
+        mark_ticker_rate_limited(ticker, x_gemini_api_key)
+    else:
         save_summary(result)
-        
+
     return {"status": "ok", "data": result}

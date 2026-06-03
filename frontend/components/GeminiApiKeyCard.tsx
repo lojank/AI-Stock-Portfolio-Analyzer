@@ -45,7 +45,7 @@ export default function GeminiApiKeyCard() {
     }
 
     setStatus('checking');
-    if (!silent) setMessage('Verifying key with Gemini…');
+    if (!silent) setMessage('Checking key format…');
 
     try {
       const data = await validateKey(trimmed);
@@ -55,7 +55,7 @@ export default function GeminiApiKeyCard() {
       return data;
     } catch {
       setStatus('error');
-      setMessage('Could not reach the server. Is the backend running?');
+      setMessage('Could not reach the server.');
       return null;
     }
   }, []);
@@ -90,9 +90,9 @@ export default function GeminiApiKeyCard() {
     setHasSavedKey(true);
     setIsDirty(false);
     setMessage(
-      data.status === 'rate_limited'
-        ? 'Key saved. It works, but quota is tight, briefings may fail until limits reset.'
-        : 'Key saved and verified. Briefings will use your Gemini quota.',
+      data.status === 'ok'
+        ? 'Key saved. Briefings will use your Gemini quota.'
+        : 'Key saved.',
     );
   };
 
@@ -204,7 +204,7 @@ export default function GeminiApiKeyCard() {
                 disabled={status === 'checking' || !apiKey.trim()}
                 className="inline-flex items-center justify-center rounded bg-teal-600 hover:bg-teal-700 text-white text-sm font-medium px-4 py-2 disabled:opacity-50 disabled:cursor-not-allowed transition-colors min-w-[7.5rem]"
               >
-                {status === 'checking' ? 'Verifying…' : 'Verify & Save'}
+                {status === 'checking' ? 'Checking…' : 'Save Key'}
               </button>
               {(apiKey.trim() || hasSavedKey) && (
                 <button
@@ -227,7 +227,7 @@ export default function GeminiApiKeyCard() {
 
           {!isDirty && hasSavedKey && (status === 'valid' || status === 'rate_limited') && (
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Stored key verified. Edit the field and click Verify &amp; Save to change it.
+              Stored key saved. Edit the field and click Save Key to change it.
             </p>
           )}
         </form>

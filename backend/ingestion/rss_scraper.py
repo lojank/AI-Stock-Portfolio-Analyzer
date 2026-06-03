@@ -1,5 +1,6 @@
 import feedparser
 import httpx
+import re
 from bs4 import BeautifulSoup
 from urllib.parse import quote
 
@@ -16,6 +17,12 @@ KNOWN_BAD_TITLES = [
     "page not found",
     "no results"
 ]
+
+# US-style symbols: 1-10 chars, letters/numbers/dots/hyphens, no spaces
+TICKER_PATTERN = re.compile(r"^[A-Z0-9][A-Z0-9.-]{0,9}$")
+
+def is_valid_ticker_format(ticker: str) -> bool:
+    return bool(TICKER_PATTERN.match(ticker.upper().strip()))
 
 def fetch_news(ticker: str) -> list[dict]:
     url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={quote(ticker)}&region=US&lang=en-US"
@@ -42,13 +49,19 @@ def fetch_news(ticker: str) -> list[dict]:
     return articles
 
 def is_valid_ticker(ticker: str) -> bool:
+    ticker = ticker.upper().strip()
+    if not is_valid_ticker_format(ticker):
+        return False
+
     url = f"https://feeds.finance.yahoo.com/rss/2.0/headline?s={quote(ticker)}&region=US&lang=en-US"
     feed = feedparser.parse(url)
-    
+
+    if not feed.entries:
+        return False
+
     # If the feed has entries and any are a known error symbol lookup page, it's invalid
     for entry in feed.entries:
         if any(bad in entry.title.lower() for bad in KNOWN_BAD_TITLES):
             return False
-            
-    # Otherwise, even if empty, the ticker format is considered valid (just no news)
+
     return True

@@ -148,97 +148,85 @@ export default function PortfolioBriefingPage() {
           <>
             <QuotaAlertBanner apiQuota={apiQuota} isDemo={isDemo} />
 
-            <div className="flex flex-col lg:flex-row gap-8">
-              {/* Left column — sticky metadata + narrative */}
-              <div className="w-full lg:w-[380px] lg:shrink-0">
-                <div className="lg:sticky lg:top-8">
-                  {/* Portfolio header */}
-                  <div className="mb-6">
-                    <h1 className="text-3xl font-semibold text-zinc-900 dark:text-zinc-100">
-                      {portfolioName}
-                    </h1>
-                    <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
-                      Daily market briefings compiled from scraped RSS feeds.
-                    </p>
-                    {allTickers.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5 mt-4">
-                        {allTickers.map((ticker) => (
-                          <span key={ticker} className="inline-flex items-center rounded bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">
-                            {ticker}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Narrative panel */}
-                  {showNarrative && <NarrativePanel narrative={narrative} />}
+            <div className="mb-6">
+              <h1 className="text-3xl font-semibold text-zinc-900 dark:text-zinc-100">
+                {portfolioName}
+              </h1>
+              <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400 font-medium">
+                Daily market briefings compiled from scraped RSS feeds.
+              </p>
+              {allTickers.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-4">
+                  {allTickers.map((ticker) => (
+                    <span key={ticker} className="inline-flex items-center rounded bg-zinc-100 dark:bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:text-zinc-300">
+                      {ticker}
+                    </span>
+                  ))}
                 </div>
-              </div>
-
-              {/* Right column — ticker briefing cards */}
-              <div className="flex-1 min-w-0">
-                {allTickers.length > 0 ? (
-                  <>
-                    <h2 className="text-xl font-semibold text-zinc-900 dark:text-white mb-6">Ticker Briefings</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      {allTickers.map((ticker, idx) => {
-                        const summary = summaries.find(s => s.ticker.toUpperCase() === ticker.toUpperCase());
-                        if (summary) {
-                          return <TickerCard key={ticker || idx} summary={summary} />;
-                        } else {
-                          const quotaBlocked = apiQuota?.failed_tickers?.some(
-                            (t) => t.toUpperCase() === ticker.toUpperCase()
-                          );
-                          return (
-                            <div
-                              key={ticker || idx}
-                              className={`border rounded-lg p-6 flex flex-col justify-between ${
-                                quotaBlocked
-                                  ? 'border-amber-200 dark:border-amber-900/40 bg-amber-50/20 dark:bg-amber-950/10'
-                                  : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900'
-                              }`}
-                            >
-                              <div>
-                                <div className="flex justify-between items-center mb-3">
-                                  <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 m-0">{ticker}</h2>
-                                  <span
-                                    className={`rounded px-2.5 py-0.5 text-xs font-medium ${
-                                      quotaBlocked
-                                        ? 'text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-950/20 dark:border-amber-900/40'
-                                        : 'text-zinc-700 bg-zinc-50 border border-zinc-200 dark:text-zinc-400 dark:bg-zinc-800/20 dark:border-zinc-700'
-                                    }`}
-                                  >
-                                    {quotaBlocked ? 'Quota limit' : 'No data'}
-                                  </span>
-                                </div>
-                                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-4 leading-relaxed">
-                                  {quotaBlocked
-                                    ? apiQuota?.used_custom_key
-                                      ? 'Quota limit reached. Verify your API key limits or try again later.'
-                                      : isDemo
-                                        ? apiQuota?.using_demo_key
-                                          ? 'Demo limit hit. Try again later or sign in.'
-                                          : 'Shared demo limit reached. Sign in with your own key.'
-                                          : 'Shared limit reached. Add your own API key to continue.'
-                                    : 'No recent articles found for this ticker.'}
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        }
-                      })}
-                    </div>
-                  </>
-                ) : apiQuota?.status === 'ok' && !narrative ? (
-                  <div className="rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 px-6 py-10 text-center bg-white dark:bg-zinc-900">
-                    <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                      Nothing here yet. Briefings show up once the ingestion pipeline has run.
-                    </p>
-                  </div>
-                ) : null}
-              </div>
+              )}
             </div>
+
+            {showNarrative && <NarrativePanel narrative={narrative} />}
+
+            {allTickers.length > 0 ? (
+              <>
+                <h2 className="text-xl font-semibold text-zinc-900 dark:text-white mb-6 mt-8">Ticker Briefings</h2>
+                <div className="grid grid-cols-1 gap-6">
+                  {allTickers.map((ticker, idx) => {
+                    const summary = summaries.find(s => s.ticker.toUpperCase() === ticker.toUpperCase());
+                    if (summary) {
+                      return <TickerCard key={ticker || idx} summary={summary} />;
+                    } else {
+                      const quotaBlocked = apiQuota?.failed_tickers?.some(
+                        (t) => t.toUpperCase() === ticker.toUpperCase()
+                      );
+                      return (
+                        <div
+                          key={ticker || idx}
+                          className={`border rounded-lg p-6 flex flex-col justify-between ${
+                            quotaBlocked
+                              ? 'border-amber-200 dark:border-amber-900/40 bg-amber-50/20 dark:bg-amber-950/10'
+                              : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900'
+                          }`}
+                        >
+                          <div>
+                            <div className="flex justify-between items-center mb-3">
+                              <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 m-0">{ticker}</h2>
+                              <span
+                                className={`rounded px-2.5 py-0.5 text-xs font-medium ${
+                                  quotaBlocked
+                                    ? 'text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-950/20 dark:border-amber-900/40'
+                                    : 'text-zinc-700 bg-zinc-50 border border-zinc-200 dark:text-zinc-400 dark:bg-zinc-800/20 dark:border-zinc-700'
+                                }`}
+                              >
+                                {quotaBlocked ? 'Quota limit' : 'No data'}
+                              </span>
+                            </div>
+                            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-4 leading-relaxed">
+                              {quotaBlocked
+                                ? apiQuota?.used_custom_key
+                                  ? 'Quota limit reached. Verify your API key limits or try again later.'
+                                  : isDemo
+                                    ? apiQuota?.using_demo_key
+                                      ? 'Demo limit hit. Try again later or sign in.'
+                                      : 'Shared demo limit reached. Sign in with your own key.'
+                                      : 'Shared limit reached. Add your own API key to continue.'
+                                : 'No recent articles found for this ticker.'}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    }
+                  })}
+                </div>
+              </>
+            ) : apiQuota?.status === 'ok' && !narrative ? (
+              <div className="rounded-lg border border-dashed border-zinc-200 dark:border-zinc-800 px-6 py-10 text-center bg-white dark:bg-zinc-900">
+                <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                  Nothing here yet. Briefings show up once the ingestion pipeline has run.
+                </p>
+              </div>
+            ) : null}
           </>
         )}
       </main>

@@ -1,40 +1,25 @@
-from google import genai
+import re
 
-VALIDATION_MODEL = "gemini-2.5-flash"
+# Google AI Studio keys: AIza… or newer AQ.… prefixed keys
+GEMINI_KEY_PATTERN = re.compile(r"^(AIza[0-9A-Za-z_-]{20,}|AQ\.[A-Za-z0-9_-]{20,})$")
 
 
 def validate_gemini_api_key(api_key: str) -> dict:
-    # verify gemini key works by making a simple dummy model call
-    try:
-        client = genai.Client(api_key=api_key)
-        client.models.generate_content(
-            model=VALIDATION_MODEL,
-            contents="Reply with exactly: OK",
-        )
-        return {
-            "valid": True,
-            "status": "ok",
-            "message": "API key is valid and ready to use.",
-        }
-    except Exception as e:
-        err = str(e)
-        if "429" in err or "RESOURCE_EXHAUSTED" in err:
-            return {
-                "valid": True,
-                "status": "rate_limited",
-                "message": "Key is valid, but you've hit a rate or daily quota limit. Briefings may fail until quota resets.",
-            }
-        if any(
-            token in err
-            for token in ("401", "403", "API_KEY_INVALID", "API key not valid", "PERMISSION_DENIED")
-        ):
-            return {
-                "valid": False,
-                "status": "invalid",
-                "message": "Invalid API key. Check the key in Google AI Studio and try again.",
-            }
+    key = api_key.strip()
+    if not key:
         return {
             "valid": False,
-            "status": "error",
-            "message": "Could not verify this key. Check your connection and try again.",
+            "status": "missing",
+            "message": "Enter an API key to validate.",
         }
+    if not GEMINI_KEY_PATTERN.match(key):
+        return {
+            "valid": False,
+            "status": "invalid",
+            "message": "Invalid API key format. Copy a key from Google AI Studio (starts with AIza… or AQ.…).",
+        }
+    return {
+        "valid": True,
+        "status": "ok",
+        "message": "API key format looks valid. Briefings will use your Gemini quota.",
+    }

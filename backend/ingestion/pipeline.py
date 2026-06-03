@@ -50,9 +50,13 @@ async def run_pipeline():
             api_key = demo_api_key if ticker in DEFAULT_DEMO_TICKERS else None
             result = summarize_articles(ticker, relevant_articles, api_key=api_key)
 
-            save_summary(result)
-            portfolio_summaries.append(result)
-            print(f"  {ticker} done - sentiment: {result.get('sentiment')}")
+            from ai.summary_cache import is_rate_limit_summary
+            if not is_rate_limit_summary(result):
+                save_summary(result)
+                portfolio_summaries.append(result)
+                print(f"  {ticker} done - sentiment: {result.get('sentiment')}")
+            else:
+                print(f"  {ticker} failed due to API rate limit/quota, skipping database save")
         except Exception as e:
             print(f"Error processing ticker {ticker} in pipeline: {e}")
 
