@@ -22,7 +22,7 @@ from ingestion.storage import get_cached_narrative, save_cached_narrative
 from cachetools import TTLCache
 from typing import Optional
 
-app = FastAPI()
+app = FastAPI(title="AI Stock Portfolio Analyzer")
 
 # In-memory cache to save GCS latency (100 items max, 24 hr TTL)
 NARRATIVE_MEMORY_CACHE = TTLCache(maxsize=100, ttl=86400)

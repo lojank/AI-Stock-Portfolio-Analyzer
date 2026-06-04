@@ -1,4 +1,4 @@
-# Portfolio News Summarizer
+# AI Stock Portfolio Analyzer
 
 An AI-powered portfolio briefing app that pulls financial news, summarizes each ticker, and creates a cross-portfolio risk narrative with Gemini. The app has a FastAPI backend, a Next.js frontend, Supabase persistence/auth, Yahoo Finance RSS ingestion, and optional Google Cloud Storage caching.
 

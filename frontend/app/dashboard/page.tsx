@@ -88,7 +88,7 @@ export default function DashboardPage() {
           <div className="flex h-16 justify-between items-center">
             <div className="flex">
               <div className="flex flex-shrink-0 items-center">
-                <span className="text-xl font-semibold text-zinc-900 dark:text-white">Portfolio Summarizer</span>
+                <span className="text-xl font-semibold text-zinc-900 dark:text-white">AI Stock Portfolio Analyzer</span>
               </div>
             </div>
             <div className="flex items-center space-x-4">

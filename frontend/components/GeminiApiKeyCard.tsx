@@ -176,7 +176,7 @@ export default function GeminiApiKeyCard() {
             <div className="relative flex-1">
               <input
                 type={showKey ? 'text' : 'password'}
-                placeholder="Paste your API key (AIza… or AQ.…)"
+                placeholder="Paste your API key"
                 value={apiKey}
                 onChange={(e) => {
                   setApiKey(e.target.value);

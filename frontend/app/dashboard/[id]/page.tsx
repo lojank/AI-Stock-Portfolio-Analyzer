@@ -131,7 +131,7 @@ export default function PortfolioBriefingPage() {
             </div>
             <div className="flex items-center space-x-4">
               <span className="text-sm font-semibold text-zinc-900 dark:text-white">
-                Portfolio Summarizer
+                AI Stock Portfolio Analyzer
               </span>
             </div>
           </div>
