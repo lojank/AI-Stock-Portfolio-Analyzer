@@ -7,6 +7,7 @@ export interface ApiQuota {
   used_custom_key: boolean;
   using_demo_key?: boolean;
   failed_tickers: string[];
+  invalid_tickers?: string[];
   narrative_limited: boolean;
   message: string;
 }
