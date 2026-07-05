@@ -2,7 +2,7 @@ from google import genai
 import os
 import re
 
-from ai.summary_cache import RATE_LIMIT_KEY_RISK
+from ai.summary_cache import RATE_LIMIT_KEY_RISK, INVALID_KEY_KEY_RISK
 
 client = genai.Client()
 
@@ -45,8 +45,26 @@ def _rate_limit_result(ticker: str, error: str = "") -> dict:
     }
 
 
+def _invalid_key_result(ticker: str, error: str = "") -> dict:
+    return {
+        "ticker": ticker,
+        "raw": f"Error: {error}" if error else "",
+        "summary": (
+            f"Recent news summaries for {ticker} could not be generated because the provided Gemini API "
+            "key is invalid or inactive. Please update your API key on the Dashboard."
+        ),
+        "sentiment": "neutral",
+        "key_risk": INVALID_KEY_KEY_RISK,
+        "key_opportunity": "N/A",
+    }
+
+
 def _is_rate_limit_error(err: str) -> bool:
     return "429" in err or "RESOURCE_EXHAUSTED" in err
+
+
+def _is_invalid_key_error(err: str) -> bool:
+    return "API_KEY_INVALID" in err or "API key not valid" in err
 
 
 def summarize_articles(ticker: str, articles: list[dict], api_key: str = None) -> dict:
@@ -75,9 +93,10 @@ KEY_OPPORTUNITY: One sentence describing the biggest opportunity mentioned."""
         return _parse_summary_block(ticker, response.text)
     except Exception as e:
         print(f"Error generating summary for {ticker}: {e}")
-        if _is_rate_limit_error(str(e)):
-            return _rate_limit_result(ticker, str(e))
-        return _rate_limit_result(ticker, str(e))
+        err_msg = str(e)
+        if _is_invalid_key_error(err_msg):
+            return _invalid_key_result(ticker, err_msg)
+        return _rate_limit_result(ticker, err_msg)
 
 
 def summarize_articles_batch(
@@ -137,8 +156,8 @@ KEY_OPPORTUNITY: One sentence describing the biggest opportunity mentioned."""
     except Exception as e:
         print(f"Error generating batch summary for {tickers}: {e}")
         err = str(e)
-        if _is_rate_limit_error(err):
-            return {ticker: _rate_limit_result(ticker, err) for ticker in tickers}
+        if _is_invalid_key_error(err):
+            return {ticker: _invalid_key_result(ticker, err) for ticker in tickers}
         return {ticker: _rate_limit_result(ticker, err) for ticker in tickers}
 
 
@@ -183,7 +202,11 @@ KEY_OPPORTUNITY: One sentence describing the biggest opportunity mentioned."""
                     response = local_client.models.generate_content(model=MODEL, contents=single_prompt)
                     results[ticker] = _parse_summary_block(ticker, response.text)
                 except Exception as e:
-                    results[ticker] = _rate_limit_result(ticker, str(e))
+                    err_msg = str(e)
+                    if _is_invalid_key_error(err_msg):
+                        results[ticker] = _invalid_key_result(ticker, err_msg)
+                    else:
+                        results[ticker] = _rate_limit_result(ticker, err_msg)
             else:
                 results[ticker] = {
                     "ticker": ticker,

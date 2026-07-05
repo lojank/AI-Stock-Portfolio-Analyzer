@@ -14,6 +14,7 @@ from ai.summarizer import summarize_articles, summarize_articles_batch
 from ai.validate_key import validate_gemini_api_key
 from ai.summary_cache import (
     is_rate_limit_summary,
+    is_invalid_key_summary,
     is_ticker_rate_limited,
     mark_ticker_rate_limited,
     summary_is_fresh,
@@ -54,6 +55,11 @@ def is_rate_limit_narrative(narrative: str) -> bool:
     quota_signal = "exceeded" in lower or "unavailable" in lower or "constraints" in lower
     return "rate limit" in lower or ("quota" in lower and quota_signal)
 
+def is_invalid_key_narrative(narrative: str) -> bool:
+    if not narrative:
+        return False
+    return "Invalid Gemini API key" in narrative
+
 def _quota_message(
     *,
     status: str,
@@ -88,6 +94,12 @@ def _quota_message(
             "Check usage at https://ai.dev/rate-limit or try again later."
         )
 
+    if status == "invalid_key":
+        return (
+            "Your Gemini API key is invalid or inactive. "
+            "Please check the key and update it on the Dashboard."
+        )
+
     parts = []
     if failed_tickers:
         if used_custom_key:
@@ -117,25 +129,34 @@ def build_api_quota(
     *,
     used_custom_key: bool,
     rate_limited_tickers: list[str],
+    invalid_key_tickers: list[str] = None,
     summaries: list[dict],
     narrative: str,
     is_demo: bool,
     using_demo_key: bool = False,
 ) -> dict:
+    if invalid_key_tickers is None:
+        invalid_key_tickers = []
+        
     failed_tickers = list(dict.fromkeys(rate_limited_tickers))
+    invalid_tickers = list(dict.fromkeys(invalid_key_tickers))
     narrative_limited = is_rate_limit_narrative(narrative)
+    narrative_invalid = is_invalid_key_narrative(narrative)
 
-    if not failed_tickers and not narrative_limited:
+    if not failed_tickers and not invalid_tickers and not narrative_limited and not narrative_invalid:
         return {
             "status": "ok",
             "used_custom_key": used_custom_key,
             "using_demo_key": using_demo_key,
             "failed_tickers": [],
+            "invalid_tickers": [],
             "narrative_limited": False,
             "message": "",
         }
 
-    if len(summaries) == 0 and (failed_tickers or narrative_limited):
+    if invalid_tickers or narrative_invalid:
+        status = "invalid_key"
+    elif len(summaries) == 0 and (failed_tickers or narrative_limited):
         status = "user_exhausted" if used_custom_key else "server_exhausted"
     else:
         status = "partial"
@@ -143,8 +164,8 @@ def build_api_quota(
     message = _quota_message(
         status=status,
         used_custom_key=used_custom_key,
-        failed_tickers=failed_tickers,
-        narrative_limited=narrative_limited,
+        failed_tickers=failed_tickers + invalid_tickers,
+        narrative_limited=narrative_limited or narrative_invalid,
         is_demo=is_demo,
         using_demo_key=using_demo_key,
     )
@@ -154,7 +175,8 @@ def build_api_quota(
         "used_custom_key": used_custom_key,
         "using_demo_key": using_demo_key,
         "failed_tickers": failed_tickers,
-        "narrative_limited": narrative_limited,
+        "invalid_tickers": invalid_tickers,
+        "narrative_limited": narrative_limited or narrative_invalid,
         "message": message,
     }
 
@@ -265,6 +287,7 @@ def _run_batch_on_demand_analysis(
     tickers: list[str],
     gemini_api_key: str | None,
     rate_limited_tickers: list[str],
+    invalid_key_tickers: list[str],
 ) -> list[dict]:
     """Fetch news and batch-summarize uncached tickers."""
     ticker_articles: dict[str, list[dict]] = {}
@@ -292,6 +315,9 @@ def _run_batch_on_demand_analysis(
             mark_ticker_rate_limited(ticker, gemini_api_key)
             rate_limited_tickers.append(ticker)
             print(f"  {ticker}: analysis returned rate-limit error")
+        elif is_invalid_key_summary(result):
+            invalid_key_tickers.append(ticker)
+            print(f"  {ticker}: analysis returned invalid-key error")
         else:
             save_summary(result)
             new_summaries.append(result)
@@ -306,6 +332,7 @@ def _narrative_payload(
     tickers_list: list,
     used_custom_key: bool,
     rate_limited_tickers: list,
+    invalid_key_tickers: list,
     is_demo: bool,
     using_demo_key: bool,
 ) -> dict:
@@ -316,6 +343,7 @@ def _narrative_payload(
         "api_quota": build_api_quota(
             used_custom_key=used_custom_key,
             rate_limited_tickers=rate_limited_tickers,
+            invalid_key_tickers=invalid_key_tickers,
             summaries=summaries,
             narrative=narrative,
             is_demo=is_demo,
@@ -332,6 +360,7 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
     )
     using_demo_key = is_demo and bool(gemini_api_key)
     rate_limited_tickers: list[str] = []
+    invalid_key_tickers: list[str] = []
 
     if is_demo and tickers:
         tickers_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
@@ -357,7 +386,7 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
             continue
 
         data = get_summaries(ticker, limit=1)
-        if data and not is_rate_limit_summary(data[0]) and summary_is_fresh(data[0]):
+        if data and not is_rate_limit_summary(data[0]) and not is_invalid_key_summary(data[0]) and summary_is_fresh(data[0]):
             summaries.append(data[0])
         else:
             tickers_needing_analysis.append(ticker)
@@ -370,6 +399,7 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
                 tickers_needing_analysis,
                 gemini_api_key,
                 rate_limited_tickers,
+                invalid_key_tickers,
             )
         )
 
@@ -380,6 +410,7 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
             tickers_list,
             used_custom_key,
             rate_limited_tickers,
+            invalid_key_tickers,
             is_demo,
             using_demo_key,
         )
@@ -399,6 +430,7 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
             tickers_list,
             used_custom_key,
             rate_limited_tickers,
+            invalid_key_tickers,
             is_demo,
             using_demo_key,
         )
@@ -414,16 +446,17 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
                 tickers_list,
                 used_custom_key,
                 rate_limited_tickers,
+                invalid_key_tickers,
                 is_demo,
                 using_demo_key,
             )
     except Exception as e:
         print(f"Error checking GCS cache (L2 cache bypass): {e}")
 
-    # Cache miss - generate new narrative and save to both caches (unless rate-limited)
+    # Cache miss - generate new narrative and save to both caches (unless rate-limited/invalid key)
     narrative = generate_risk_narrative(summaries, api_key=gemini_api_key)
     
-    if not is_rate_limit_narrative(narrative):
+    if not is_rate_limit_narrative(narrative) and not is_invalid_key_narrative(narrative):
         try:
             save_cached_narrative(cache_key, narrative)
         except Exception as e:
@@ -436,6 +469,7 @@ async def get_portfolio_narrative(user_id: str, portfolio_id: str, tickers: Opti
         tickers_list,
         used_custom_key,
         rate_limited_tickers,
+        invalid_key_tickers,
         is_demo,
         using_demo_key,
     )
@@ -461,7 +495,7 @@ async def analyze_ticker(ticker: str, x_gemini_api_key: Optional[str] = Header(N
 
     if existing.data:
         summary_data = existing.data[0]
-        if not is_rate_limit_summary(summary_data) and summary_is_fresh(summary_data):
+        if not is_rate_limit_summary(summary_data) and not is_invalid_key_summary(summary_data) and summary_is_fresh(summary_data):
             return {"status": "cached", "data": summary_data}
 
     if is_ticker_rate_limited(ticker, x_gemini_api_key):
@@ -479,6 +513,9 @@ async def analyze_ticker(ticker: str, x_gemini_api_key: Optional[str] = Header(N
 
     if is_rate_limit_summary(result):
         mark_ticker_rate_limited(ticker, x_gemini_api_key)
+        return {"status": "error", "message": result.get("summary")}
+    elif is_invalid_key_summary(result):
+        return {"status": "invalid_key", "message": "The provided Gemini API key is invalid or inactive."}
     else:
         save_summary(result)
 

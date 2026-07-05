@@ -7,6 +7,8 @@ SUMMARY_MAX_AGE_HOURS = 24
 RATE_LIMIT_COOLDOWN_SECONDS = 900  # 15 minutes
 
 RATE_LIMIT_KEY_RISK = "Gemini API rate limit or quota exceeded."
+INVALID_KEY_KEY_RISK = "Invalid Gemini API key."
+
 
 # ticker + api-key fingerprint -> cooldown after a rate-limit failure
 RATE_LIMIT_CACHE: TTLCache = TTLCache(maxsize=500, ttl=RATE_LIMIT_COOLDOWN_SECONDS)
@@ -56,3 +58,9 @@ def is_rate_limit_summary(summary: dict) -> bool:
         key_risk == RATE_LIMIT_KEY_RISK
         or "Gemini API free tier daily quota" in summary_text
     )
+
+
+def is_invalid_key_summary(summary: dict) -> bool:
+    key_risk = summary.get("key_risk") or ""
+    return key_risk == INVALID_KEY_KEY_RISK
+

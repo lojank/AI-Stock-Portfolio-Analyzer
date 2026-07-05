@@ -180,13 +180,20 @@ export default function PortfolioBriefingPage() {
                       const quotaBlocked = apiQuota?.failed_tickers?.some(
                         (t) => t.toUpperCase() === ticker.toUpperCase()
                       );
+                      const invalidKeyBlocked = apiQuota?.status === 'invalid_key' || apiQuota?.invalid_tickers?.some(
+                        (t) => t.toUpperCase() === ticker.toUpperCase()
+                      );
+                      const blocked = quotaBlocked || invalidKeyBlocked;
+
                       return (
                         <div
                           key={ticker || idx}
                           className={`border rounded-lg p-6 flex flex-col justify-between ${
-                            quotaBlocked
-                              ? 'border-amber-200 dark:border-amber-900/40 bg-amber-50/20 dark:bg-amber-950/10'
-                              : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900'
+                            invalidKeyBlocked
+                              ? 'border-rose-200 dark:border-rose-900/40 bg-rose-50/10 dark:bg-rose-950/10'
+                              : quotaBlocked
+                                ? 'border-amber-200 dark:border-amber-900/40 bg-amber-50/20 dark:bg-amber-950/10'
+                                : 'border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900'
                           }`}
                         >
                           <div>
@@ -194,24 +201,28 @@ export default function PortfolioBriefingPage() {
                               <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-100 m-0">{ticker}</h2>
                               <span
                                 className={`rounded px-2.5 py-0.5 text-xs font-medium ${
-                                  quotaBlocked
-                                    ? 'text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-950/20 dark:border-amber-900/40'
-                                    : 'text-zinc-700 bg-zinc-50 border border-zinc-200 dark:text-zinc-400 dark:bg-zinc-800/20 dark:border-zinc-700'
+                                  invalidKeyBlocked
+                                    ? 'text-rose-700 bg-rose-50 border border-rose-200 dark:text-rose-400 dark:bg-rose-950/20 dark:border-rose-900/40'
+                                    : quotaBlocked
+                                      ? 'text-amber-700 bg-amber-50 border border-amber-200 dark:text-amber-400 dark:bg-amber-950/20 dark:border-amber-900/40'
+                                      : 'text-zinc-700 bg-zinc-50 border border-zinc-200 dark:text-zinc-400 dark:bg-zinc-800/20 dark:border-zinc-700'
                                 }`}
                               >
-                                {quotaBlocked ? 'Quota limit' : 'No data'}
+                                {invalidKeyBlocked ? 'Invalid key' : quotaBlocked ? 'Quota limit' : 'No data'}
                               </span>
                             </div>
                             <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-4 leading-relaxed">
-                              {quotaBlocked
-                                ? apiQuota?.used_custom_key
-                                  ? 'Quota limit reached. Verify your API key limits or try again later.'
-                                  : isDemo
-                                    ? apiQuota?.using_demo_key
-                                      ? 'Demo limit hit. Try again later or sign in.'
-                                      : 'Shared demo limit reached. Sign in with your own key.'
-                                      : 'Shared limit reached. Add your own API key to continue.'
-                                : 'No recent articles found for this ticker.'}
+                              {invalidKeyBlocked
+                                ? 'Gemini API key is invalid or inactive. Please check your configuration on the Dashboard.'
+                                : quotaBlocked
+                                  ? apiQuota?.used_custom_key
+                                    ? 'Quota limit reached. Verify your API key limits or try again later.'
+                                    : isDemo
+                                      ? apiQuota?.using_demo_key
+                                        ? 'Demo limit hit. Try again later or sign in.'
+                                        : 'Shared demo limit reached. Sign in with your own key.'
+                                        : 'Shared limit reached. Add your own API key to continue.'
+                                  : 'No recent articles found for this ticker.'}
                             </p>
                           </div>
                         </div>

@@ -35,6 +35,15 @@ WEEKLY_WATCHLIST: The 1-2 tickers that need the most attention this week and why
         return response.text
     except Exception as e:
         print(f"Error generating risk narrative: {e}")
+        err_msg = str(e)
+        from ai.summarizer import _is_invalid_key_error
+        if _is_invalid_key_error(err_msg):
+            return (
+                "PORTFOLIO_SUMMARY: The high-level portfolio narrative could not be generated because the provided Gemini API key is invalid or inactive. Please update your API key on the Dashboard.\n"
+                "SHARED_RISKS: High-level narrative unavailable (Invalid Gemini API key).\n"
+                "CONCENTRATION_WARNING: Invalid Gemini API key.\n"
+                "WEEKLY_WATCHLIST: N/A"
+            )
         return (
             "PORTFOLIO_SUMMARY: The high-level portfolio narrative could not be generated at this time. "
             "This is typically due to API rate limits or quota constraints. However, your individual asset briefings below are still fully active and available.\n"
